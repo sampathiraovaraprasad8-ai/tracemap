@@ -41,11 +41,13 @@ export default function App() {
       const response = await fetch('/api/topology');
       if (!response.ok) throw new Error('Failed to fetch topology');
       const data = await response.json();
-      setNodes(data.nodes || []);
-      setEdges(data.edges || []);
+      if (data.nodes && data.nodes.length > 0) {
+        setNodes(data.nodes);
+        setEdges(data.edges || []);
+      }
 
       // Default pipeline stats if none set yet
-      if (!pipelineStats && data.nodes) {
+      if (!pipelineStats && data.nodes && data.nodes.length > 0) {
         const rawLines = (logInput || '').split(/\r?\n/).filter(l => l.trim() && !l.trim().startsWith('#'));
         setPipelineStats({
           ingestedCount: rawLines.length || data.edges.length,
