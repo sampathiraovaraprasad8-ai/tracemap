@@ -16,7 +16,8 @@ const PORT = process.env.PORT || 5000;
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-app.use(express.text({ type: ['text/plain', 'text/curl'], limit: '10mb' }));
+app.use(express.text({ type: '*/*', limit: '10mb' }));
+app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // ==========================================
@@ -66,19 +67,21 @@ initDb();
 // ==========================================
 // Phase 2 Req 2: Security Sanitization Middleware
 // ==========================================
-// sanitizeLogContent function imported from ./src/utils/sanitizer.js
 
 export function sanitizeMiddleware(req, res, next) {
-  if (req.body) {
+  try {
+    let raw = '';
     if (typeof req.body === 'string') {
-      req.rawSanitizedLog = sanitizeLogContent(req.body);
-    } else if (req.body.logs && typeof req.body.logs === 'string') {
-      req.rawSanitizedLog = sanitizeLogContent(req.body.logs);
-      req.body.logs = req.rawSanitizedLog;
-    } else {
-      req.rawSanitizedLog = sanitizeLogContent(JSON.stringify(req.body));
+      raw = req.body;
+    } else if (req.body && typeof req.body.logs === 'string') {
+      raw = req.body.logs;
+    } else if (req.body && typeof req.body === 'object' && Object.keys(req.body).length > 0) {
+      raw = JSON.stringify(req.body);
+    } else if (Buffer.isBuffer(req.body)) {
+      raw = req.body.toString('utf-8');
     }
-  } else {
+    req.rawSanitizedLog = sanitizeLogContent(raw);
+  } catch (e) {
     req.rawSanitizedLog = '';
   }
   next();
@@ -101,7 +104,26 @@ function parseServicesFromLogs(sanitizedLogs) {
     line = line.trim();
     if (!line || line.startsWith('#')) continue;
 
-    // Pattern A: cURL with explicit X-Source-Service header
+    // Pattern A: Check explicit Source -> Target arrow lines first
+    const customLineMatch = line.match(/^([\w\s-]+)\s*(?:->|calls|requests)\s*([\w\s-]+)$/i);
+    if (customLineMatch) {
+      const source = formatServiceName(customLineMatch[1]);
+      const target = formatServiceName(customLineMatch[2]);
+      if (source && target && source !== target) {
+        connections.push({
+          source,
+          target,
+          method: 'POST',
+          endpoint: 'N/A',
+          status: '200 OK',
+          timestamp: new Date().toISOString()
+        });
+        currentSource = target;
+      }
+      continue;
+    }
+
+    // Pattern B: cURL with explicit X-Source-Service header
     const sourceMatch = line.match(/-H\s+['"]X-Source-Service:\s*([^'"]+)['"]/i);
     if (sourceMatch) {
       currentSource = formatServiceName(sourceMatch[1]);
@@ -117,27 +139,30 @@ function parseServicesFromLogs(sanitizedLogs) {
       method = methodMatch[1].toUpperCase();
     }
 
-    // Check if line specifies source -> target explicitly (e.g. "API Gateway -> Analytics Service")
-    const customLineMatch = line.match(/^([\w\s-]+)\s*(?:->|calls|requests)\s*([\w\s-]+)$/i);
-    if (customLineMatch) {
-      source = formatServiceName(customLineMatch[1]);
-      target = formatServiceName(customLineMatch[2]);
-    } else {
-      // Extract URL from cURL command (e.g. http://analytics-service:9090/event or https://payment-service/charge)
-      const urlMatch = line.match(/https?:\/\/([a-zA-Z0-9.-]+(?::\d+)?)([^'\s\\]*)/i);
-      if (urlMatch) {
-        target = formatServiceName(urlMatch[1]);
-        endpoint = urlMatch[2] || '/';
-      }
+    const urlMatch = line.match(/https?:\/\/([a-zA-Z0-9.-]+(?::\d+)?)([^'\s\\]*)/i);
+    if (urlMatch) {
+      target = formatServiceName(urlMatch[1]);
+      endpoint = urlMatch[2] || '/';
     }
 
     const invalidNames = ['Curl', 'Post', 'Get', 'Put', 'Delete', 'X', 'H', 'D', 'Header', 'Unknown Service'];
-    if (source && target && source !== target && !invalidNames.includes(target) && !invalidNames.includes(source)) {
-      connections.push({
-        source,
-        target,
-        method,
-        endpoint,
+    if (source && target && !invalidNames.includes(target) && !invalidNames.includes(source)) {
+      if (source !== target) {
+        connections.push({
+          source,
+          target,
+          method,
+          endpoint,
+          status: '200 OK',
+          timestamp: new Date().toISOString()
+        });
+        currentSource = target;
+      }
+    }
+  }
+
+  return connections;
+}
         status: '200 OK',
         timestamp: new Date().toISOString()
       });
@@ -607,9 +632,43 @@ app.post('/api/node-explain', (req, res) => {
   }
 });
 
-app.get('*', (req, res, next) => {
-  if (req.path.startsWith('/api')) return next();
+/**
+ * Chat Box POST /api/chat Alias Endpoint
+ */
+app.post('/api/chat', (req, res) => {
+  try {
+    const payload = req.body || {};
+    const replyText = processNodeChatRequest({
+      newMessage: payload.message || payload.newMessage || '',
+      nodeContext: payload.nodeContext || {}
+    });
+    return res.json({ reply: replyText });
+  } catch (err) {
+    console.error('Chat API Error:', err);
+    return res.status(500).json({ error: 'Failed to process chat request.' });
+  }
+});
+
+// API 404 Fallback - Always return JSON for /api routes
+app.all('/api/*', (req, res) => {
+  return res.status(404).json({ error: `API endpoint ${req.method} ${req.originalUrl} not found.` });
+});
+
+// Serve static assets from Vite build in production
+app.use(express.static(path.join(__dirname, 'dist')));
+
+// SPA Client-side catch-all fallback
+app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'dist', 'index.html'));
+});
+
+// Global Express Error Handler for JSON responses on /api
+app.use((err, req, res, next) => {
+  console.error('Express Error Handler:', err);
+  if (req.originalUrl && req.originalUrl.startsWith('/api')) {
+    return res.status(500).json({ error: err.message || 'Internal Server Error' });
+  }
+  return res.status(500).send('Internal Server Error');
 });
 
 app.listen(PORT, () => {
