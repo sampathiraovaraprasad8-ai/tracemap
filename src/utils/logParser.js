@@ -71,9 +71,20 @@ export function parseLogsClient(rawInput) {
     }
   }
 
+  // Deduplicate connection pairs (source -> target)
+  const uniqueConns = [];
+  const connMap = new Set();
+  for (const c of connections) {
+    const key = `${c.source}->${c.target}`;
+    if (!connMap.has(key)) {
+      connMap.add(key);
+      uniqueConns.push(c);
+    }
+  }
+
   // Collect unique service names
   const serviceSet = new Set();
-  connections.forEach(c => {
+  uniqueConns.forEach(c => {
     serviceSet.add(c.source);
     serviceSet.add(c.target);
   });
@@ -82,7 +93,7 @@ export function parseLogsClient(rawInput) {
 
   // DFS Cycle Check
   const adj = {};
-  connections.forEach(c => {
+  uniqueConns.forEach(c => {
     if (!adj[c.source]) adj[c.source] = [];
     adj[c.source].push(c.target);
   });
@@ -104,7 +115,7 @@ export function parseLogsClient(rawInput) {
   const nodes = services.map((svc, index) => {
     const col = index % 3;
     const row = Math.floor(index / 3);
-    const connCount = connections.filter(c => c.source === svc || c.target === svc).length;
+    const connCount = uniqueConns.filter(c => c.source === svc || c.target === svc).length;
     return {
       id: svc,
       type: 'customServiceNode',
@@ -118,7 +129,7 @@ export function parseLogsClient(rawInput) {
   });
 
   // Format React Flow Edges
-  const edges = connections.map((conn) => {
+  const edges = uniqueConns.map((conn) => {
     const isCircular = hasCyclePath(conn.source, conn.target);
     const latencyMs = Math.floor(Math.random() * (250 - 10 + 1)) + 10;
     return {

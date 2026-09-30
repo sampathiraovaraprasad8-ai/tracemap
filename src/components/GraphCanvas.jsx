@@ -244,6 +244,7 @@ export default function GraphCanvas({
   return (
     <div className="flex-1 h-full relative bg-[#080c14] overflow-hidden">
       <ReactFlow
+        key={`rf-canvas-${displayNodes.length}-${displayEdges.length}`}
         nodes={displayNodes}
         edges={displayEdges}
         nodeTypes={nodeTypes}
