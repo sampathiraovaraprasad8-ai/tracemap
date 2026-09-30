@@ -145,10 +145,17 @@ export default function App() {
       if (res.ok) {
         setPipelineStats(null);
         setFeedbackMsg({ type: 'success', text: 'Topology reset to initial seed state.' });
-        await fetchTopology();
+        const topRes = await fetch('/api/topology');
+        if (topRes.ok) {
+          const topData = await topRes.json();
+          if (topData.nodes && topData.nodes.length > 0) {
+            setNodes(topData.nodes);
+            setEdges(topData.edges || []);
+          }
+        }
       }
     } catch (err) {
-      console.error('Reset error:', err);
+      console.warn('Reset error:', err);
     } finally {
       setIsResetting(false);
     }
@@ -164,21 +171,24 @@ export default function App() {
     setActiveCycleNodes(null);
     setActiveCycleEdges(null);
     setSearchQuery('');
+    setLogInput('');
+
+    // Explicitly clear React Flow state
+    setNodes([]);
+    setEdges([]);
+    setPipelineStats({
+      ingestedCount: 0,
+      sanitizedCount: 0,
+      servicesIdentified: 0,
+      dependenciesCreated: 0,
+      circularDetected: 0
+    });
+    setFeedbackMsg({ type: 'success', text: 'Canvas cleared. Ready for custom trace ingestion.' });
+
     try {
-      const res = await fetch('/api/clear', { method: 'POST' });
-      if (res.ok) {
-        setPipelineStats({
-          ingestedCount: 0,
-          sanitizedCount: 0,
-          servicesIdentified: 0,
-          dependenciesCreated: 0,
-          circularDetected: 0
-        });
-        setFeedbackMsg({ type: 'success', text: 'Canvas cleared. Ready for custom trace ingestion.' });
-        await fetchTopology();
-      }
+      await fetch('/api/clear', { method: 'POST' });
     } catch (err) {
-      console.error('Clear error:', err);
+      console.warn('Clear API warning:', err);
     } finally {
       setIsResetting(false);
     }
