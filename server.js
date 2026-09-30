@@ -163,14 +163,6 @@ function parseServicesFromLogs(sanitizedLogs) {
 
   return connections;
 }
-        status: '200 OK',
-        timestamp: new Date().toISOString()
-      });
-    }
-  }
-
-  return connections;
-}
 
 function formatServiceName(str) {
   if (!str) return 'Unknown Service';
